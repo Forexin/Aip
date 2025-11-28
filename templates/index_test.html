@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>信息源时序队列</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta http-equiv="refresh" content="300">
+    <style>
+        /* 使用grid布局将页面分成四个区域 */
+        body {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto 1fr;
+            gap: 20px;
+            padding: 20px;
+            height: 100vh;
+        }
+        #feed {
+            grid-column: 1 / 2;
+            grid-row: 1 / 3;
+            overflow-y: auto;
+            border-right: 1px solid #ccc;
+            padding-right: 20px;
+        }
+        #search-results {
+            grid-column: 2 / 3;
+            grid-row: 1 / 3;
+            overflow-y: auto;
+            padding-left: 20px;
+        }
+        #search-results div {
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        #search-results div a {
+            text-decoration: none;
+            color: #007bff;
+        }
+        #search-results div a:hover {
+            text-decoration: underline;
+        }
+        #search-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background-color: #fff;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Responsive design for mobile devices */
+        @media (max-width: 600px) {
+            body {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto 1fr;
+                padding: 10px;
+            }
+            #feed {
+                grid-column: 1 / 2;
+                grid-row: 1 / 2;
+                padding-right: 0;
+                border-right: none;
+            }
+            #search-results {
+                grid-column: 1 / 2;
+                grid-row: 2 / 3;
+                padding-left: 0;
+            }
+            #search-container {
+                position: static;
+                flex-direction: row;
+                justify-content: space-between;
+                padding: 5px;
+            }
+            #search-container input {
+                flex: 1;
+                margin-right: 5px;
+            }
+            #search-container button {
+                flex: none;
+                padding: 5px 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="feed" class="feed">
+        <h1>信息源时序队列</h1>
+        <ul id="feed-list"></ul>
+    </div>
+
+    <div id="search-results" class="search-results"></div>
+
+    <div id="search-container">
+        <input type="text" id="search-input" placeholder="搜索...">
+        <button id="search-button">搜索</button>
+        <button id="keywords-button">高频词</button>
+        <button id="earth-button">地球</button>
+        <div id="country-names-div" style="position: fixed; top: 150px; right: 20px; background-color: rgba(255, 255, 255, 0.8); border: 1px solid #ccc; border-radius: 5px; padding: 2px; max-width: 150px; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;">
+            <h3 style="grid-column: span 3; margin: 0; font-size: 12px; cursor: pointer;" onclick="toggleCountryNames()">信息涉及国家</h3>
+            <ul id="country-names-list" style="list-style: none; padding: 0; margin: 0; font-size: 10px; display: contents;"></ul>
+        </div>
+    </div>
+
+    <div id="keywords-div" style="display: none; position: absolute; width: auto; height: auto; background-color: lightgreen; border: 1px solid #ccc; border-radius: 5px; padding: 10px; cursor: move; left: calc(100% - 220px); top: 100px;">
+        <p>这是一个可拖动的div。</p>
+    </div>
+
+    <div id="earth-div" style="display: none; position: absolute; width: 600px; height: 600px; background-color: transparent; border: 1px solid transparent; border-radius: 5px; padding: 10px; cursor: move; right: 0; bottom: 0;">
+        <div id="earth-container" style="width: 100%; height: 100%;"></div>
+    </div>
+
+    
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/static/three-globe@2.42.11.js"></script>
+    <script>
+        async function fetchFeed(source) {
+            try {
+                const response = await fetch(`/api/rss/${source}`);
+                if (!response.ok) {
+                    console.error(`Failed to fetch data for source: ${source}`);
+                    return [];
+                }
+                const data = await response.json();
+                return data.map(item => ({ ...item, source })); // Add source to each item
+            } catch (error) {
+                console.error(`Error fetching data for source: ${source}`, error);
+                return [];
+            }
+        }
+
+        function updateFeedList(items) {
+            const listElement = document.getElementById('feed-list');
+            const existingItems = new Set(Array.from(listElement.children).map(child => child.getAttribute('data-link') + child.querySelector('a').textContent));
+
+            items.forEach(item => {
+                const uniqueIdentifier = item.link + item.title;
+                if (!existingItems.has(uniqueIdentifier)) {
+                    const listItem = document.createElement('li');
+                    listItem.innerHTML = `<strong>&lt;${item.source}&gt;</strong> <a href="${item.link}" target="_blank">${item.title}</a>`;
+                    listItem.setAttribute('data-link', item.link);
+
+                    listItem.addEventListener('click', () => {
+                        navigator.clipboard.writeText(item.link).then(() => {
+                            alert('Link copied to clipboard!');
+                        }).catch(err => {
+                            console.error('Failed to copy: ', err);
+                        });
+                    });
+
+                    if (item.pubDate) {
+                        const date = new Date(item.pubDate);
+                        let inserted = false;
+                        for (let i = 0; i < listElement.children.length; i++) {
+                            const childDate = new Date(listElement.children[i].getAttribute('data-pubdate'));
+                            if (date > childDate) {
+                                listElement.insertBefore(listItem, listElement.children[i]);
+                                inserted = true;
+                                break;
+                            }
+                        }
+                        if (!inserted) {
+                            listElement.appendChild(listItem);
+                        }
+                        listItem.setAttribute('data-pubdate', item.pubDate);
+                    } else {
+                        const randomIndex = Math.floor(Math.random() * (listElement.children.length + 1));
+                        listElement.insertBefore(listItem, listElement.children[randomIndex] || null);
+                    }
+                }
+            });
+        }
+
+        function updateCountryNamesDiv() {
+            const countryNamesList = document.getElementById('country-names-list');
+            countryNamesList.innerHTML = '';
+            englishCountryNames.forEach(englishName => {
+                const chineseName = Object.keys(countryNameMap).find(key => countryNameMap[key] === englishName);
+                if (chineseName) {
+                    const listItem = document.createElement('li');
+                    listItem.textContent = chineseName;
+                    listItem.style.cursor = 'pointer';
+                    listItem.addEventListener('click', () => {
+                        const searchInput = document.getElementById('search-input');
+                        const searchButton = document.getElementById('search-button');
+                        if (searchInput && searchButton) {
+                            searchInput.value = chineseName; // 将中文国家名填入搜索框
+                            searchButton.click(); // 触发搜索按钮点击事件
+                        }
+                    });
+                    countryNamesList.appendChild(listItem);
+                }
+            });
+        }
+
+        let matchedChineseCountryNames = [];
+
+        async function updateFeeds() {
+            try {
+                const response = await fetch('/api/rss_sources');
+                if (!response.ok) {
+                    console.error('Failed to fetch RSS sources');
+                    return;
+                }
+                const sources = await response.json();
+
+                let rssTextContent = ''; // 用于存储RSS数据中的文本内容
+
+                for (const source of sources) {
+                    const data = await fetchFeed(source.name); // Use 'name' to fetch data
+                    updateFeedList(data);
+
+                    // 提取RSS数据中的文本内容
+                    data.forEach(item => {
+                        rssTextContent += item.title + ' ' + (item.description || '') + ' ';
+                    });
+                }
+
+                // 检查chineseCountryNames中的国家名是否出现在RSS文本中
+                matchedChineseCountryNames = chineseCountryNames.filter(name => rssTextContent.includes(name));
+                englishCountryNames = matchedChineseCountryNames.map(name => countryNameMap[name]); // 更新全局变量
+
+                // 更新国家名显示
+                updateCountryNamesDiv();
+
+                // 重新高亮国家
+                fetch('/static/data/ne_110m_admin_0_countries.geojson')
+                    .then(res => res.json())
+                    .then(countries => {
+                        highlightCountries(countries.features); // 确保在更新englishCountryNames后调用
+                    });
+
+                // 刷新地球
+                if (earthDiv.style.display === 'block') {
+                    initEarth();
+                }
+
+            } catch (error) {
+                console.error('Error fetching RSS sources', error);
+            }
+        }
+
+        setInterval(updateFeeds, 40000);
+        updateFeeds(); // Initial load
+
+        document.getElementById('search-button').addEventListener('click', function() {
+            const query = document.getElementById('search-input').value.toLowerCase();
+            const listElement = document.getElementById('feed-list');
+            const searchResultsElement = document.getElementById('search-results');
+            searchResultsElement.innerHTML = ''; // Clear previous results
+
+            const items = Array.from(listElement.children).map(child => {
+                return {
+                    title: child.querySelector('a').textContent,
+                    link: child.querySelector('a').href,
+                    source: child.querySelector('strong').textContent
+                };
+            });
+
+            const filteredItems = items.filter(item => item.title.toLowerCase().includes(query));
+
+            if (filteredItems.length > 0) {
+                filteredItems.forEach(item => {
+                    const resultItem = document.createElement('div');
+                    resultItem.innerHTML = `<strong>${item.source}</strong> <a href="${item.link}" target="_blank">${item.title}</a>`;
+                    searchResultsElement.appendChild(resultItem);
+                });
+            } else {
+                searchResultsElement.innerHTML = '<p>没有找到匹配的结果。</p>';
+            }
+        });
+
+        const keywordsButton = document.getElementById('keywords-button');
+        const keywordsDiv = document.getElementById('keywords-div');
+
+        keywordsButton.addEventListener('click', function() {
+            // Extract text from RSS feed list
+            const listElement = document.getElementById('feed-list');
+            const textContent = Array.from(listElement.children).map(child => {
+                return child.querySelector('a').textContent;
+            }).join(' ');
+
+            // Split text into words and count frequencies, only consider Chinese words with 2 to 5 characters
+            const words = textContent.match(/[\u4e00-\u9fa5]{2,5}/g);
+            const frequency = {};
+            words.forEach(word => {
+                frequency[word] = (frequency[word] || 0) + 1;
+            });
+
+            // Sort words by frequency and get top 20
+            const topWords = Object.entries(frequency)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 20);
+
+            // Display top words in the keywords div
+            keywordsDiv.innerHTML = '<h3>高频词</h3>' + topWords.map(([word, count]) => `<p>${word}: ${count}</p>`).join('');
+            keywordsDiv.style.display = 'block';
+        });
+
+        document.addEventListener('click', function(event) {
+            if (!keywordsDiv.contains(event.target) && event.target !== keywordsButton) {
+                keywordsDiv.style.display = 'none';
+            }
+        });
+
+        // Make the div draggable
+        keywordsDiv.addEventListener('mousedown', function(e) {
+            let shiftX = e.clientX - keywordsDiv.getBoundingClientRect().left;
+            let shiftY = e.clientY - keywordsDiv.getBoundingClientRect().top;
+
+            function moveAt(pageX, pageY) {
+                keywordsDiv.style.left = pageX - shiftX + 'px';
+                keywordsDiv.style.top = pageY - shiftY + 'px';
+            }
+
+            function onMouseMove(event) {
+                moveAt(event.pageX, event.pageY);
+            }
+
+            document.addEventListener('mousemove', onMouseMove);
+
+            keywordsDiv.onmouseup = function() {
+                document.removeEventListener('mousemove', onMouseMove);
+                keywordsDiv.onmouseup = null;
+            };
+        });
+
+        keywordsDiv.ondragstart = function() {
+            return false;
+        };
+
+        const earthButton = document.getElementById('earth-button');
+        const earthDiv = document.getElementById('earth-div');
+        const earthContainer = document.getElementById('earth-container');
+
+        earthButton.addEventListener('click', function() {
+            console.log('English Country Names:', englishCountryNames); // 打印englishCountryNames
+            earthDiv.style.display = 'block';
+            initEarth();
+        });
+
+        document.addEventListener('click', function(event) {
+            if (!earthDiv.contains(event.target) && event.target !== earthButton) {
+                earthDiv.style.display = 'none';
+            }
+        });
+
+        let isRotating = true;
+        let scale = 2;
+        let isEarthInitialized = false;
+
+        // 创建一个中文到英文的国家名映射表（联合国所有成员国）
+        const countryNameMap = {
+            '阿富汗': 'Afghanistan',
+            '阿尔巴尼亚': 'Albania',
+            '阿尔及利亚': 'Algeria',
+            '安道尔': 'Andorra',
+            '安哥拉': 'Angola',
+            '安提瓜和巴布达': 'Antigua and Barbuda',
+            '阿根廷': 'Argentina',
+            '亚美尼亚': 'Armenia',
+            '澳大利亚': 'Australia',
+            '奥地利': 'Austria',
+            '阿塞拜疆': 'Azerbaijan',
+            '巴哈马': 'Bahamas',
+            '巴林': 'Bahrain',
+            '孟加拉国': 'Bangladesh',
+            '巴巴多斯': 'Barbados',
+            '白俄罗斯': 'Belarus',
+            '比利时': 'Belgium',
+            '伯利兹': 'Belize',
+            '贝宁': 'Benin',
+            '不丹': 'Bhutan',
+            '玻利维亚': 'Bolivia',
+            '波斯尼亚和黑塞哥维那': 'Bosnia and Herzegovina',
+            '博茨瓦纳': 'Botswana',
+            '巴西': 'Brazil',
+            '文莱': 'Brunei',
+            '保加利亚': 'Bulgaria',
+            '布基纳法索': 'Burkina Faso',
+            '布隆迪': 'Burundi',
+            '柬埔寨': 'Cambodia',
+            '喀麦隆': 'Cameroon',
+            '加拿大': 'Canada',
+            '佛得角': 'Cape Verde',
+            '中非共和国': 'Central African Republic',
+            '乍得': 'Chad',
+            '智利': 'Chile',
+            '中国': 'China',
+            '哥伦比亚': 'Colombia',
+            '科摩罗': 'Comoros',
+            '刚果': 'Congo',
+            '哥斯达黎加': 'Costa Rica',
+            '克罗地亚': 'Croatia',
+            '古巴': 'Cuba',
+            '塞浦路斯': 'Cyprus',
+            '捷克': 'Czech Republic',
+            '刚果民主共和国': 'Democratic Republic of the Congo',
+            '丹麦': 'Denmark',
+            '吉布提': 'Djibouti',
+            '多米尼克': 'Dominica',
+            '多米尼加共和国': 'Dominican Republic',
+            '厄瓜多尔': 'Ecuador',
+            '埃及': 'Egypt',
+            '萨尔瓦多': 'El Salvador',
+            '赤道几内亚': 'Equatorial Guinea',
+            '厄立特里亚': 'Eritrea',
+            '爱沙尼亚': 'Estonia',
+            '埃塞俄比亚': 'Ethiopia',
+            '斐济': 'Fiji',
+            '芬兰': 'Finland',
+            '法国': 'France',
+            '加蓬': 'Gabon',
+            '冈比亚': 'Gambia',
+            '格鲁吉亚': 'Georgia',
+            '德国': 'Germany',
+            '加纳': 'Ghana',
+            '希腊': 'Greece',
+            '格林纳达': 'Grenada',
+            '危地马拉': 'Guatemala',
+            '几内亚': 'Guinea',
+            '几内亚比绍': 'Guinea-Bissau',
+            '圭亚那': 'Guyana',
+            '海地': 'Haiti',
+            '洪都拉斯': 'Honduras',
+            '匈牙利': 'Hungary',
+            '冰岛': 'Iceland',
+            '印度': 'India',
+            '印度尼西亚': 'Indonesia',
+            '伊朗': 'Iran',
+            '伊拉克': 'Iraq',
+            '爱尔兰': 'Ireland',
+            '以色列': 'Israel',
+            '意大利': 'Italy',
+            '科特迪瓦': 'Ivory Coast',
+            '牙买加': 'Jamaica',
+            '日本': 'Japan',
+            '约旦': 'Jordan',
+            '哈萨克斯坦': 'Kazakhstan',
+            '肯尼亚': 'Kenya',
+            '基里巴斯': 'Kiribati',
+            '科威特': 'Kuwait',
+            '吉尔吉斯斯坦': 'Kyrgyzstan',
+            '老挝': 'Laos',
+            '拉脱维亚': 'Latvia',
+            '黎巴嫩': 'Lebanon',
+            '莱索托': 'Lesotho',
+            '利比里亚': 'Liberia',
+            '利比亚': 'Libya',
+            '列支敦士登': 'Liechtenstein',
+            '立陶宛': 'Lithuania',
+            '卢森堡': 'Luxembourg',
+            '马达加斯加': 'Madagascar',
+            '马拉维': 'Malawi',
+            '马来西亚': 'Malaysia',
+            '马尔代夫': 'Maldives',
+            '马里': 'Mali',
+            '马耳他': 'Malta',
+            '马绍尔群岛': 'Marshall Islands',
+            '毛里塔尼亚': 'Mauritania',
+            '毛里求斯': 'Mauritius',
+            '墨西哥': 'Mexico',
+            '密克罗尼西亚': 'Micronesia',
+            '摩尔多瓦': 'Moldova',
+            '摩纳哥': 'Monaco',
+            '蒙古': 'Mongolia',
+            '黑山': 'Montenegro',
+            '摩洛哥': 'Morocco',
+            '莫桑比克': 'Mozambique',
+            '缅甸': 'Myanmar',
+            '纳米比亚': 'Namibia',
+            '瑙鲁': 'Nauru',
+            '尼泊尔': 'Nepal',
+            '荷兰': 'Netherlands',
+            '新西兰': 'New Zealand',
+            '尼加拉瓜': 'Nicaragua',
+            '尼日尔': 'Niger',
+            '尼日利亚': 'Nigeria',
+            '朝鲜': 'North Korea',
+            '北马其顿': 'North Macedonia',
+            '挪威': 'Norway',
+            '阿曼': 'Oman',
+            '巴基斯坦': 'Pakistan',
+            '帕劳': 'Palau',
+            '巴拿马': 'Panama',
+            '巴布亚新几内亚': 'Papua New Guinea',
+            '巴拉圭': 'Paraguay',
+            '秘鲁': 'Peru',
+            '菲律宾': 'Philippines',
+            '波兰': 'Poland',
+            '葡萄牙': 'Portugal',
+            '卡塔尔': 'Qatar',
+            '罗马尼亚': 'Romania',
+            '俄罗斯': 'Russia',
+            '卢旺达': 'Rwanda',
+            '圣基茨和尼维斯': 'Saint Kitts and Nevis',
+            '圣卢西亚': 'Saint Lucia',
+            '圣文森特和格林纳丁斯': 'Saint Vincent and the Grenadines',
+            '萨摩亚': 'Samoa',
+            '圣马力诺': 'San Marino',
+            '圣多美和普林西比': 'Sao Tome and Principe',
+            '沙特阿拉伯': 'Saudi Arabia',
+            '塞内加尔': 'Senegal',
+            '塞尔维亚': 'Serbia',
+            '塞舌尔': 'Seychelles',
+            '塞拉利昂': 'Sierra Leone',
+            '新加坡': 'Singapore',
+            '斯洛伐克': 'Slovakia',
+            '斯洛文尼亚': 'Slovenia',
+            '所罗门群岛': 'Solomon Islands',
+            '索马里': 'Somalia',
+            '南非': 'South Africa',
+            '韩国': 'South Korea',
+            '南苏丹': 'South Sudan',
+            '西班牙': 'Spain',
+            '斯里兰卡': 'Sri Lanka',
+            '苏丹': 'Sudan',
+            '苏里南': 'Suriname',
+            '瑞典': 'Sweden',
+            '瑞士': 'Switzerland',
+            '叙利亚': 'Syria',
+            '塔吉克斯坦': 'Tajikistan',
+            '坦桑尼亚': 'Tanzania',
+            '泰国': 'Thailand',
+            '东帝汶': 'Timor-Leste',
+            '多哥': 'Togo',
+            '汤加': 'Tonga',
+            '特立尼达和多巴哥': 'Trinidad and Tobago',
+            '突尼斯': 'Tunisia',
+            '土耳其': 'Turkey',
+            '土库曼斯坦': 'Turkmenistan',
+            '图瓦卢': 'Tuvalu',
+            '乌干达': 'Uganda',
+            '乌克兰': 'Ukraine',
+            '阿联酋': 'United Arab Emirates',
+            '英国': 'United Kingdom',
+            '美国': 'United States of America',
+            '乌拉圭': 'Uruguay',
+            '乌兹别克斯坦': 'Uzbekistan',
+            '瓦努阿图': 'Vanuatu',
+            '委内瑞拉': 'Venezuela',
+            '越南': 'Vietnam',
+            '也门': 'Yemen',
+            '赞比亚': 'Zambia',
+            '津巴布韦': 'Zimbabwe'
+        };
+
+        // 联合国所有成员国的中文名称列表
+        let chineseCountryNames = ['阿富汗', '阿尔巴尼亚', '阿尔及利亚', '安道尔', '安哥拉', '安提瓜和巴布达', '阿根廷', '亚美尼亚', '澳大利亚', '奥地利', '阿塞拜疆', '巴哈马', '巴林', '孟加拉国', '巴巴多斯', '白俄罗斯', '比利时', '伯利兹', '贝宁', '不丹', '玻利维亚', '波斯尼亚和黑塞哥维那', '博茨瓦纳', '巴西', '文莱', '保加利亚', '布基纳法索', '布隆迪', '柬埔寨', '喀麦隆', '加拿大', '佛得角', '中非共和国', '乍得', '智利', '中国', '哥伦比亚', '科摩罗', '刚果', '哥斯达黎加', '克罗地亚', '古巴', '塞浦路斯', '捷克', '刚果民主共和国', '丹麦', '吉布提', '多米尼克', '多米尼加共和国', '厄瓜多尔', '埃及', '萨尔瓦多', '赤道几内亚', '厄立特里亚', '爱沙尼亚', '埃塞俄比亚', '斐济', '芬兰', '法国', '加蓬', '冈比亚', '格鲁吉亚', '德国', '加纳', '希腊', '格林纳达', '危地马拉', '几内亚', '几内亚比绍', '圭亚那', '海地', '洪都拉斯', '匈牙利', '冰岛', '印度', '印度尼西亚', '伊朗', '伊拉克', '爱尔兰', '以色列', '意大利', '科特迪瓦', '牙买加', '日本', '约旦', '哈萨克斯坦', '肯尼亚', '基里巴斯', '科威特', '吉尔吉斯斯坦', '老挝', '拉脱维亚', '黎巴嫩', '莱索托', '利比里亚', '利比亚', '列支敦士登', '立陶宛', '卢森堡', '马达加斯加', '马拉维', '马来西亚', '马尔代夫', '马里', '马耳他', '马绍尔群岛', '毛里塔尼亚', '毛里求斯', '墨西哥', '密克罗尼西亚', '摩尔多瓦', '摩纳哥', '蒙古', '黑山', '摩洛哥', '莫桑比克', '缅甸', '纳米比亚', '瑙鲁', '尼泊尔', '荷兰', '新西兰', '尼加拉瓜', '尼日尔', '尼日利亚', '朝鲜', '北马其顿', '挪威', '阿曼', '巴基斯坦', '帕劳', '巴拿马', '巴布亚新几内亚', '巴拉圭', '秘鲁', '菲律宾', '波兰', '葡萄牙', '卡塔尔', '罗马尼亚', '俄罗斯', '卢旺达', '圣基茨和尼维斯', '圣卢西亚', '圣文森特和格林纳丁斯', '萨摩亚', '圣马力诺', '圣多美和普林西比', '沙特阿拉伯', '塞内加尔', '塞尔维亚', '塞舌尔', '塞拉利昂', '新加坡', '斯洛伐克', '斯洛文尼亚', '所罗门群岛', '索马里', '南非', '韩国', '南苏丹', '西班牙', '斯里兰卡', '苏丹', '苏里南', '瑞典', '瑞士', '叙利亚', '塔吉克斯坦', '坦桑尼亚', '泰国', '东帝汶', '多哥', '汤加', '特立尼达和多巴哥', '突尼斯', '土耳其', '土库曼斯坦', '图瓦卢', '乌干达', '乌克兰', '阿联酋', '英国', '美国', '乌拉圭', '乌兹别克斯坦', '瓦努阿图', '委内瑞拉', '越南', '也门', '赞比亚', '津巴布韦'];
+
+        // 将中文国家名转换为英文国家名
+        let englishCountryNames = [];
+
+        function highlightCountries(countries) {
+            countries.forEach(country => {
+                if (englishCountryNames.includes(country.properties.ADMIN)) {
+                    country.polygonCapColor = 'rgba(255, 0, 0, 0.8)'; // 高亮颜色
+                    country.showLabel = true; // 标记为显示标签
+                } else {
+                    country.polygonCapColor = 'rgba(255, 182, 193, 0.3)'; // 更淡的颜色
+                    country.showLabel = false; // 不显示标签
+                }
+            });
+        }
+
+        function initEarth() {
+            // Remove existing renderer
+            while (earthContainer.firstChild) {
+                earthContainer.removeChild(earthContainer.firstChild);
+            }
+
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(75, earthContainer.clientWidth / earthContainer.clientHeight, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({ alpha: true });
+            renderer.setSize(earthContainer.clientWidth, earthContainer.clientHeight);
+            earthContainer.appendChild(renderer.domElement);
+
+            const globe = new ThreeGlobe()
+                .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+                .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+                .showAtmosphere(true)
+                .atmosphereColor('#3a228a')
+                .atmosphereAltitude(0.25);
+
+            scene.add(globe);
+
+            camera.position.z = 200;
+
+            // Load country polygons from local file
+            fetch('/static/data/ne_110m_admin_0_countries.geojson')
+                .then(res => res.json())
+                .then(countries => {
+                    console.log('Countries loaded:', countries.features.length); // Log number of countries loaded
+                    highlightCountries(countries.features);
+                    globe.polygonsData(countries.features)
+                        .polygonCapColor(d => d.polygonCapColor)
+                        .polygonSideColor(() => 'rgba(255, 182, 193, 0.3)')
+                        .polygonStrokeColor(() => '#111')
+                        .polygonLabel(({ properties: d }) => d.showLabel ? `<b style='color: white;'>${d.ADMIN}</b>` : '')
+                        .onPolygonClick(({ properties: d }) => {
+                            console.log('Clicked country:', d.ADMIN);
+                            const searchInput = document.getElementById('search-input');
+                            const searchButton = document.getElementById('search-button');
+                            
+                            if (searchInput && searchButton) {
+                                searchInput.value = d.ADMIN;
+                                searchButton.click();
+                            } else {
+                                console.error('Search input or button not found');
+                            }
+                        });
+                })
+                .catch(error => console.error('Error loading country polygons:', error));
+
+            function animate() {
+                requestAnimationFrame(animate);
+                if (isRotating) {
+                    globe.rotation.y += 0.001;
+                }
+                renderer.render(scene, camera);
+            }
+            animate();
+
+            // Add mouse controls for rotation
+            let isDragging = false;
+            let previousMousePosition = {
+                x: 0,
+                y: 0
+            };
+
+            earthContainer.addEventListener('mousedown', function(e) {
+                isDragging = true;
+            });
+
+            earthContainer.addEventListener('mousemove', function(e) {
+                if (isDragging) {
+                    const deltaMove = {
+                        x: e.offsetX - previousMousePosition.x,
+                        y: e.offsetY - previousMousePosition.y
+                    };
+
+                    globe.rotation.y += deltaMove.x * 0.005;
+                    globe.rotation.x += deltaMove.y * 0.005;
+                }
+
+                previousMousePosition = {
+                    x: e.offsetX,
+                    y: e.offsetY
+                };
+            });
+
+            document.addEventListener('mouseup', function() {
+                isDragging = false;
+            });
+
+            document.getElementById('toggle-rotation').addEventListener('click', function() {
+                isRotating = !isRotating;
+            });
+
+            document.getElementById('rotate-left').addEventListener('mousedown', function() {
+                globe.rotation.y -= 0.1;
+            });
+
+            document.getElementById('rotate-right').addEventListener('mousedown', function() {
+                globe.rotation.y += 0.1;
+            });
+
+            document.getElementById('rotate-up').addEventListener('mousedown', function() {
+                globe.rotation.x -= 0.1;
+            });
+
+            document.getElementById('rotate-down').addEventListener('mousedown', function() {
+                globe.rotation.x += 0.1;
+            });
+
+            document.getElementById('zoom-in').addEventListener('click', function() {
+                if (scale < 2) {
+                    scale += 0.1;
+                    globe.scale.set(scale, scale, scale);
+                }
+            });
+
+            // Disable zoom-out button
+            const zoomOutButton = document.getElementById('zoom-out');
+            if (zoomOutButton) {
+                zoomOutButton.style.display = 'none';
+            } else {
+                console.error('Zoom-out button not found');
+            }
+
+            isEarthInitialized = true; // Mark as initialized
+        }
+
+        // Disable zoom-out button
+        const zoomOutButton = document.getElementById('zoom-out');
+        zoomOutButton.style.display = 'none';
+
+        // Make the Earth div background transparent
+        earthDiv.style.backgroundColor = 'transparent';
+
+        // Make the Earth div draggable by its border
+        earthDiv.addEventListener('mousedown', function(e) {
+            let shiftX = e.clientX - earthDiv.getBoundingClientRect().left;
+            let shiftY = e.clientY - earthDiv.getBoundingClientRect().top;
+
+            function moveAt(pageX, pageY) {
+                earthDiv.style.left = pageX - shiftX + 'px';
+                earthDiv.style.top = pageY - shiftY + 'px';
+            }
+
+            function onMouseMove(event) {
+                moveAt(event.pageX, event.pageY);
+            }
+
+            document.addEventListener('mousemove', onMouseMove);
+
+            document.addEventListener('mouseup', function() {
+                document.removeEventListener('mousemove', onMouseMove);
+            }, { once: true });
+        });
+
+        earthDiv.ondragstart = function() {
+            return false;
+        };
+
+        function toggleCountryNames() {
+            const countryNamesList = document.getElementById('country-names-list');
+            if (countryNamesList.style.display === 'none') {
+                countryNamesList.style.display = 'contents'; // Ensure the display style is set to contents
+            } else {
+                countryNamesList.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html> 

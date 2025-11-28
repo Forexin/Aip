@@ -1,0 +1,31 @@
+# Core Flask dependencies
+flask
+requests
+feedparser
+redis
+apscheduler
+aiohttp
+
+# GUI dependencies
+pywebview==4.4.1
+
+# Additional dependencies that might be needed
+# (These are usually included with Python but listed for completeness)
+# json - built-in
+# time - built-in  
+# random - built-in
+# xml.etree.ElementTree - built-in
+# logging - built-in
+# os - built-in
+# importlib - built-in
+# asyncio - built-in
+# concurrent.futures - built-in
+# functools - built-in
+# datetime - built-in
+# atexit - built-in
+# subprocess - built-in
+# tkinter - built-in (but may need tk-dev on Linux)
+# platform - built-in
+# socket - built-in
+# webbrowser - built-in
+# threading - built-in

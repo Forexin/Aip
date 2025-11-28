@@ -1,0 +1,7 @@
+{
+    "sources": {
+        "hot_api": {"name": "Hot API", "url": "https://这是个例子请换成真实的热搜url", "type": "hot_api"},
+        "rss_example": {"name": "某个rss快讯源", "url": "https://这是个例子请换成真实的rss的url", "type": "rss"}
+        
+    }
+}
